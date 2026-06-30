@@ -1,1 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinkNest — Keyword to Link Manager</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
 
+  <div class="max-w-2xl mx-auto px-4 py-8">
+
+    <!-- Header -->
+    <header class="mb-8">
+      <h1 class="text-2xl font-bold tracking-tight flex items-center gap-2">
+        🔗 LinkNest
+      </h1>
+      <p class="text-slate-400 text-sm mt-1">Map keywords to links for your Telegram bot.</p>
+    </header>
+
+    <!-- Form -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6 shadow-lg">
+      <form id="link-form" class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Keyword</label>
+          <input
+            id="keyword-input"
+            type="text"
+            placeholder="e.g. course"
+            required
+            class="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2.5 text-sm
+                   placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Link</label>
+          <input
+            id="link-input"
+            type="url"
+            placeholder="https://drive.google.com/..."
+            required
+            class="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2.5 text-sm
+                   placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        </div>
+        <button
+          type="submit"
+          id="save-btn"
+          class="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700
+                 transition-colors py-2.5 text-sm font-semibold"
+        >
+          Save Rule
+        </button>
+        <p id="form-error" class="text-rose-400 text-xs hidden"></p>
+      </form>
+    </section>
+
+    <!-- List -->
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-slate-300">Active Rules</h2>
+        <span id="count-badge" class="text-xs text-slate-500"></span>
+      </div>
+
+      <div id="loading" class="text-slate-500 text-sm py-6 text-center">Loading…</div>
+      <div id="empty-state" class="hidden text-slate-500 text-sm py-10 text-center border border-dashed border-slate-800 rounded-2xl">
+        No rules yet. Add your first keyword above.
+      </div>
+
+      <ul id="links-list" class="space-y-2"></ul>
+    </section>
+
+  </div>
+
+  <script>
+    // ---- Supabase setup -----------------------------------------------
+    const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+    const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // ---- DOM refs -------------------------------------------------------
+    const form = document.getElementById('link-form');
+    const keywordInput = document.getElementById('keyword-input');
+    const linkInput = document.getElementById('link-input');
+    const saveBtn = document.getElementById('save-btn');
+    const formError = document.getElementById('form-error');
+    const listEl = document.getElementById('links-list');
+    const loadingEl = document.getElementById('loading');
+    const emptyEl = document.getElementById('empty-state');
+    const countBadge = document.getElementById('count-badge');
+
+    function showError(msg) {
+      formError.textContent = msg;
+      formError.classList.remove('hidden');
+    }
+    function clearError() {
+      formError.classList.add('hidden');
+      formError.textContent = '';
+    }
+
+    // ---- Render -----------------------------------------------------------
+    function renderLinks(rows) {
+      listEl.innerHTML = '';
+      countBadge.textContent = rows.length ? `${rows.length} rule${rows.length === 1 ? '' : 's'}` : '';
+
+      if (!rows.length) {
+        emptyEl.classList.remove('hidden');
+        return;
+      }
+      emptyEl.classList.add('hidden');
+
+      for (const row of rows) {
+        const li = document.createElement('li');
+        li.className = 'flex items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3';
+        li.innerHTML = `
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-indigo-300 truncate">${escapeHtml(row.keyword)}</p>
+            <a href="${escapeHtml(row.link)}" target="_blank" rel="noopener noreferrer"
+               class="text-xs text-slate-400 truncate block hover:text-slate-200">${escapeHtml(row.link)}</a>
+          </div>
+          <button data-id="${row.id}"
+            class="delete-btn shrink-0 text-xs font-semibold text-rose-400 hover:text-rose-300
+                   bg-rose-500/10 hover:bg-rose-500/20 rounded-lg px-3 py-1.5 transition-colors">
+            Delete
+          </button>
+        `;
+        listEl.appendChild(li);
+      }
+
+      document.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', () => deleteLink(btn.dataset.id));
+      });
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ---- Data ops -----------------------------------------------------------
+    async function fetchLinks() {
+      loadingEl.classList.remove('hidden');
+      const { data, error } = await supabaseClient
+        .from('links')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      loadingEl.classList.add('hidden');
+
+      if (error) {
+        console.error(error);
+        showError('Failed to load rules: ' + error.message);
+        return;
+      }
+      renderLinks(data || []);
+    }
+
+    async function addLink(keyword, link) {
+      const { error } = await supabaseClient
+        .from('links')
+        .insert([{ keyword: keyword.trim(), link: link.trim() }]);
+
+      if (error) {
+        throw error;
+      }
+    }
+
+    async function deleteLink(id) {
+      const { error } = await supabaseClient
+        .from('links')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error(error);
+        alert('Failed to delete: ' + error.message);
+        return;
+      }
+      fetchLinks();
+    }
+
+    // ---- Events -----------------------------------------------------------
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearError();
+
+      const keyword = keywordInput.value.trim();
+      const link = linkInput.value.trim();
+      if (!keyword || !link) return;
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+
+      try {
+        await addLink(keyword, link);
+        keywordInput.value = '';
+        linkInput.value = '';
+        await fetchLinks();
+      } catch (err) {
+        console.error(err);
+        if (err.code === '23505') {
+          showError('That keyword already exists. Delete it first or pick another.');
+        } else {
+          showError('Failed to save: ' + err.message);
+        }
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Rule';
+      }
+    });
+
+    // ---- Init -----------------------------------------------------------
+    fetchLinks();
+  </script>
+
+</body>
+</html>
